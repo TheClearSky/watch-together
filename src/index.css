@@ -1,0 +1,42 @@
+/* Tailwind entry for watch-together — the same arrangement as Nodestra:
+ * Tailwind v4 through `@tailwindcss/vite`, no config file, tokens in `@theme`,
+ * class scanning scoped to `src/`. The palette is Nodestra's (itself the
+ * react-blender-nodes host's) so the two apps read as one family. */
+@import 'tailwindcss' source('.');
+
+@theme static {
+  --color-primary-white: #e6e6e6;
+  --color-primary-black: #1d1d1d;
+  --color-secondary-black: #282828;
+  --color-primary-dark-gray: #303030;
+  --color-secondary-dark-gray: #444444;
+  --color-primary-gray: #545454;
+  --color-secondary-light-gray: #656565;
+  --color-primary-light-gray: #797979;
+
+  --color-primary-blue: #4772b3;
+  --color-status-completed: #4caf50;
+  --color-status-warning: #ffa500;
+  --color-status-errored: #ff4444;
+}
+
+@layer base {
+  /* The app owns the whole viewport. */
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-primary-black);
+    color: var(--color-primary-white);
+    font-family:
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
+  }
+}
