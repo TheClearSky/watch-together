@@ -254,6 +254,14 @@ class ShareController {
 
   // ── sharing (host) ──────────────────────────────────────────────────────
 
+  /** Whether I can receive THIS share's live stream: the sharer's browser can
+   *  stream AND I have a direct WebRTC path to them (not only the relay bus).
+   *  Over the bus only "My copy" works. */
+  canStreamFrom(shareId: string): boolean {
+    const view = this.view(shareId);
+    return !!view && view.streamable && this.session.isDirect(view.sharer);
+  }
+
   /** The file behind one of MY shares (for "save a copy" requests). */
   fileForShare(shareId: string): File | null {
     return this.hosted.get(shareId)?.file ?? null;
