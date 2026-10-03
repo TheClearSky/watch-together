@@ -3,9 +3,10 @@
  *
  *  - a READ-ONLY linked folder of videos (the browser asks for read access
  *    only; nothing here ever writes, renames or deletes the user's files);
- *  - tabs: `file:<id>` videos (preview on single click, like VS Code),
- *    `welcome:`, and `share:<id>` — someone else's shared tab, never
- *    persisted (the share ends with the session);
+ *  - tabs: `file:<id>` videos from the linked folder (preview on single
+ *    click, like VS Code), `opened:<id>` videos opened one at a time without
+ *    any folder (openedFiles.ts), `welcome:`, and `share:<id>` — someone
+ *    else's shared tab, never persisted (the share ends with the session);
  *  - a document adapter that hands the player a disk-backed `File` and
  *    never reads the video itself.
  */
@@ -17,7 +18,8 @@ import {
   pathOf,
   Workspace,
 } from '@theclearsky/easy-folder-management-ui';
-import type { DocumentAdapter } from '@theclearsky/easy-folder-management-ui';
+import type { ConfirmRequest, DocumentAdapter, UnlinkChoice, UnlinkPlan } from '@theclearsky/easy-folder-management-ui';
+import { OpenedFiles } from './openedFiles';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.m4v', '.mkv', '.webm', '.mov', '.ogv'];
 
@@ -32,6 +34,7 @@ const videoPolicy = extensionPolicy({
 
 const tabKinds = defineTabKinds({
   file: { persist: 'file' },
+  opened: { persist: 'key' },
   welcome: { persist: 'key' },
   share: { persist: false },
 });
@@ -55,13 +58,24 @@ class OpenVideo {
   }
 }
 
+/** The workspace asks through these; the app points them at its dialog. */
+type WorkspacePrompts = {
+  chooseUnlink(plan: UnlinkPlan): Promise<UnlinkChoice>;
+  confirm(request: ConfirmRequest): Promise<boolean>;
+};
+
 function createVideoWorkspace() {
+  const prompts: WorkspacePrompts = {
+    chooseUnlink: async () => 'cancel',
+    confirm: async () => false,
+  };
   const library = new FileLibrary({
     store: createIndexedDbStore('watch-together.library'),
     policy: videoPolicy,
     access: 'read',
   });
   const openVideo = new OpenVideo();
+  const openedFiles = new OpenedFiles();
   const documents: DocumentAdapter<VideoDocument> = {
     async load(file) {
       const disk = await file.getFile();
@@ -82,9 +96,20 @@ function createVideoWorkspace() {
     documents,
     save: false,
     welcomeTab: 'welcome:',
-    label: ({ kind }) => (kind === 'welcome' ? 'Welcome' : undefined),
+    chooseUnlink: (plan) => prompts.chooseUnlink(plan),
+    confirm: (request) => prompts.confirm(request),
+    label: ({ kind, key }) =>
+      kind === 'welcome' ? 'Welcome' : kind === 'opened' ? (openedFiles.get(key)?.name ?? 'Video') : undefined,
+    // Opened files reopen while remembered (from their handle, or by picking
+    // the file again); a share is gone once it ends.
+    canReopen: (id) => {
+      const parsed = id.split(':');
+      if (parsed[0] === 'share') return false;
+      if (parsed[0] === 'opened') return openedFiles.get(parsed.slice(1).join(':')) !== undefined;
+      return true;
+    },
   });
-  return { library, workspace, openVideo };
+  return { library, workspace, openVideo, openedFiles, prompts };
 }
 
 export { createVideoWorkspace, tabKinds, VIDEO_EXTENSIONS, videoPolicy };

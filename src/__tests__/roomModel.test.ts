@@ -120,6 +120,10 @@ describe('ownership', () => {
     expect(() => roomReducer(state, { type: 'claimOwnership', by: 'ravi', absentOwner: 'deepak' })).toThrow('next in line');
     const claimed = roomReducer(state, { type: 'claimOwnership', by: 'asha', absentOwner: 'deepak' });
     expect(claimed.owner).toBe('asha');
+    // A dropped connection is not leaving: the old owner is still a member.
+    expect(claimed.members.deepak).toBeDefined();
+    // With Asha offline, Ravi is next in line.
+    expect(roomReducer(state, { type: 'claimOwnership', by: 'ravi', absentOwner: 'deepak', present: (id) => id !== 'asha' }).owner).toBe('ravi');
     // A late duplicate claim against the OLD owner changes nothing.
     expect(roomReducer(claimed, { type: 'claimOwnership', by: 'ravi', absentOwner: 'deepak' })).toBe(claimed);
   });
