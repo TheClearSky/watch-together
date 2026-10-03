@@ -1,23 +1,24 @@
-# Builds the app and deploys it to GitHub Pages. CI is the only deploy path.
+# Builds the app on every PR (the required `build` check) and deploys it to
+# GitHub Pages on every push to main. CI is the only deploy path.
 name: Deploy to GitHub Pages
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    concurrency:
+      # A newer push to the same PR replaces its older build.
+      group: build-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,8 +34,18 @@ jobs:
           path: dist
 
   deploy:
+    # A pull request only builds; publishing the site waits for the merge.
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    # Only the deploy may write to Pages (OIDC-authenticated).
+    permissions:
+      pages: write
+      id-token: write
+    # Deploys run one at a time and are never cancelled half-way.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
