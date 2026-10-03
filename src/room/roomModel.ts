@@ -25,11 +25,13 @@ type MemberId = string;
 type Member = {
   id: MemberId;
   name: string;
+  /** Picked avatar (a seed for the procedural face); absent = derived from the id. */
+  avatar?: number;
   /** When the member was admitted (owner's clock, ms). Orders the handoff. */
   admittedAt: number;
 };
 
-type PendingRequest = { id: MemberId; name: string; requestedAt: number };
+type PendingRequest = { id: MemberId; name: string; avatar?: number; requestedAt: number };
 
 /** Per-person share rule; no entry = follow the global default ("none"). */
 type ShareRule = 'allow' | 'deny';
@@ -54,19 +56,21 @@ type RoomState = {
 };
 
 type RoomAction =
-  | { type: 'request'; id: MemberId; name: string; at: number }
+  | { type: 'request'; id: MemberId; name: string; avatar?: number; at: number }
   | { type: 'cancelRequest'; id: MemberId }
   | { type: 'admit'; by: MemberId; id: MemberId; at: number }
   | { type: 'reject'; by: MemberId; id: MemberId }
   | { type: 'kick'; by: MemberId; id: MemberId }
   | { type: 'leave'; id: MemberId }
-  | { type: 'rename'; id: MemberId; name: string }
+  | { type: 'rename'; id: MemberId; name: string; avatar?: number }
   | { type: 'setShareDefault'; by: MemberId; value: 'everyone' | 'nobody' }
   | { type: 'setShareRule'; by: MemberId; id: MemberId; rule: ShareRule | 'inherit' }
   | { type: 'setApprover'; by: MemberId; id: MemberId; approver: boolean }
   | { type: 'transferOwnership'; by: MemberId; to: MemberId }
-  /** The owner vanished: the successor (see `successorOf`) takes over. */
-  | { type: 'claimOwnership'; by: MemberId; absentOwner: MemberId };
+  /** The owner vanished (disconnected, no goodbye): the successor (see
+   *  `successorOf`) takes over. The old owner STAYS a member — a dropped
+   *  connection is not leaving — and rejoins without approval. */
+  | { type: 'claimOwnership'; by: MemberId; absentOwner: MemberId; present?: (id: MemberId) => boolean };
 
 class RoomRuleError extends Error {
   constructor(message: string) {
@@ -75,13 +79,16 @@ class RoomRuleError extends Error {
   }
 }
 
-function createRoom(code: string, owner: { id: MemberId; name: string }, at: number): RoomState {
+/** An avatar field only when there is one (signed payloads never carry `undefined`). */
+const avatarField = (avatar: number | undefined) => (avatar === undefined ? {} : { avatar });
+
+function createRoom(code: string, owner: { id: MemberId; name: string; avatar?: number }, at: number): RoomState {
   return {
     code,
     owner: owner.id,
     epoch: 1,
     version: 0,
-    members: { [owner.id]: { id: owner.id, name: owner.name, admittedAt: at } },
+    members: { [owner.id]: { id: owner.id, name: owner.name, ...avatarField(owner.avatar), admittedAt: at } },
     approvers: [],
     shareDefault: 'everyone',
     shareRules: {},
@@ -173,7 +180,10 @@ function roomReducer(state: RoomState, action: RoomAction): RoomState {
       if (isMember(state, action.id)) return state;
       if (state.banned.includes(action.id)) throw new RoomRuleError('You were removed from this room.');
       return bump(state, {
-        pending: { ...state.pending, [action.id]: { id: action.id, name: action.name, requestedAt: action.at } },
+        pending: {
+          ...state.pending,
+          [action.id]: { id: action.id, name: action.name, ...avatarField(action.avatar), requestedAt: action.at },
+        },
       });
     }
     case 'cancelRequest': {
@@ -186,7 +196,10 @@ function roomReducer(state: RoomState, action: RoomAction): RoomState {
       if (!request) return state;
       return bump(state, {
         pending: without(state.pending, action.id),
-        members: { ...state.members, [action.id]: { id: action.id, name: request.name, admittedAt: action.at } },
+        members: {
+          ...state.members,
+          [action.id]: { id: action.id, name: request.name, ...avatarField(request.avatar), admittedAt: action.at },
+        },
       });
     }
     case 'reject': {
@@ -217,8 +230,9 @@ function roomReducer(state: RoomState, action: RoomAction): RoomState {
     case 'rename': {
       const member = state.members[action.id];
       const name = action.name.trim().slice(0, 40);
-      if (!member || name.length === 0 || name === member.name) return state;
-      return bump(state, { members: { ...state.members, [action.id]: { ...member, name } } });
+      const avatar = action.avatar ?? member?.avatar;
+      if (!member || name.length === 0 || (name === member.name && avatar === member.avatar)) return state;
+      return bump(state, { members: { ...state.members, [action.id]: { ...member, name, ...avatarField(avatar) } } });
     }
     case 'setShareDefault': {
       requireOwner(state, action.by);
@@ -254,14 +268,11 @@ function roomReducer(state: RoomState, action: RoomAction): RoomState {
     }
     case 'claimOwnership': {
       if (action.absentOwner !== state.owner) return state; // someone already took over
-      if (successorOf(state) !== action.by) throw new RoomRuleError('You are not next in line.');
-      return {
-        ...state,
-        ...forget(state, action.absentOwner),
-        owner: action.by,
-        epoch: state.epoch + 1,
-        version: 0,
-      };
+      if (!action.present && successorOf(state) !== action.by) throw new RoomRuleError('You are not next in line.');
+      if (action.present && successorOf(state, action.present) !== action.by) {
+        throw new RoomRuleError('You are not next in line.');
+      }
+      return { ...state, owner: action.by, epoch: state.epoch + 1, version: 0 };
     }
   }
 }

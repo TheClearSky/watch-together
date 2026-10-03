@@ -1,23 +1,26 @@
 /* Tailwind entry for watch-together — the same arrangement as Nodestra:
  * Tailwind v4 through `@tailwindcss/vite`, no config file, tokens in `@theme`,
- * class scanning scoped to `src/`. The palette is Nodestra's (itself the
- * react-blender-nodes host's) so the two apps read as one family. */
+ * class scanning scoped to `src/`. The palette is the "stage" of Nodestra's
+ * homepage: warm near-blacks, ivory text, a gold accent (2026-10-03: "see the
+ * style of react-blender-nodes-sound homepage and use that instead"). The
+ * token NAMES stay Nodestra's so code reads the same across the two apps. */
 @import 'tailwindcss' source('.');
 
 @theme static {
-  --color-primary-white: #e6e6e6;
-  --color-primary-black: #1d1d1d;
-  --color-secondary-black: #282828;
-  --color-primary-dark-gray: #303030;
-  --color-secondary-dark-gray: #444444;
-  --color-primary-gray: #545454;
-  --color-secondary-light-gray: #656565;
-  --color-primary-light-gray: #797979;
+  --color-primary-white: #f4ead8;
+  --color-primary-black: #0c0807;
+  --color-secondary-black: #140d0b;
+  --color-primary-dark-gray: #1d1411;
+  --color-secondary-dark-gray: #33251e;
+  --color-primary-gray: #4a372d;
+  --color-secondary-light-gray: #7d6a5c;
+  --color-primary-light-gray: #a8957f;
 
-  --color-primary-blue: #4772b3;
-  --color-status-completed: #4caf50;
-  --color-status-warning: #ffa500;
-  --color-status-errored: #ff4444;
+  /* Gold; text ON it is dark (text-primary-black). */
+  --color-accent: #e9d3a8;
+  --color-status-completed: #2ecc71;
+  --color-status-warning: #f1c40f;
+  --color-status-errored: #e74c3c;
 }
 
 @layer base {
@@ -26,6 +29,34 @@
   body,
   #root {
     height: 100%;
+  }
+
+  /* Scrollbars on the stage: thin, a translucent gold thumb, no track —
+   * everywhere (app, the folder library's panels, its portaled menus). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(233 211 168 / 0.22) transparent;
+  }
+  *:hover {
+    scrollbar-color: rgb(233 211 168 / 0.38) transparent;
+  }
+  /* Safari (no scrollbar-color yet). Chrome ignores these once
+   * scrollbar-color is set. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: rgb(233 211 168 / 0.22) padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(233 211 168 / 0.45) padding-box;
   }
 
   body {
@@ -39,4 +70,26 @@
       Roboto,
       sans-serif;
   }
+}
+
+/* The folder library's public tokens (easy-folder-management-ui): set at the
+ * root and UNLAYERED, so they beat the library's layered defaults and reach
+ * its portaled menus and dialogs too. Slot classes live in src/theme/stageTheme.ts. */
+:root {
+  --efm-surface: #140d0b;
+  --efm-surface-raised: #1d1411;
+  --efm-surface-sunken: #0c0807;
+  --efm-border: #33251e;
+  --efm-hover: #2a1d17;
+  --efm-control: #4a372d;
+  --efm-fg: #f4ead8;
+  --efm-fg-muted: #a8957f;
+  --efm-fg-disabled: #7d6a5c;
+  --efm-accent: #e9d3a8;
+  --efm-on-accent: #1a100d;
+  --efm-selection: rgb(233 211 168 / 0.16);
+  --efm-warning: #f1c40f;
+  --efm-danger: #e74c3c;
+  --efm-success: #2ecc71;
+  --efm-overlay: rgb(5 2 2 / 0.72);
 }
