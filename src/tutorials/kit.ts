@@ -66,7 +66,8 @@ const plainTargets = {
   /** "📡 Sharing · 2" and its stop button. */
   'player.sharing': () => shown('stopShare')?.parentElement ?? null,
   'room.panel': () => shown('roomPanel'),
-  'room.copyLink': () => withText('roomButtons', 'invite link') ?? withText('roomButtons', 'Link copied'),
+  /** The room panel's "Share invite" / "Copy invite link" button. */
+  'room.copyLink': () => shown('roomShareInvite'),
   'room.letIn': () => withText('roomButtons', 'Let in'),
   'share.source': () => shown('shareSource'),
   'share.stream': () => withText('shareRadios', 'Stream'),

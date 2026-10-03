@@ -4,6 +4,7 @@ import type { RoomSession, RoomSnapshot } from './session';
 import { canApprove, canShare, shareRuleOf } from './roomModel';
 import type { Member } from './roomModel';
 import { Avatar, avatarSeed } from '../social/Avatar';
+import { InviteShare } from '../social/InviteShare';
 
 /**
  * Everything about the current room: the invite, who is here, join requests
@@ -37,21 +38,11 @@ function useNow(intervalMs: number): number {
   return now;
 }
 
-function copy(text: string) {
-  void navigator.clipboard?.writeText(text).catch(() => {});
-}
-
 function RoomPanel({ session, snapshot, onClose, sharing, chat, confirmRemove }: RoomPanelProps) {
   const { status, room, me, online, requests, code, link } = snapshot;
   const now = useNow(1000);
-  const [copied, setCopied] = useState<'code' | 'link' | null>(null);
   const isOwner = room?.owner === me.memberId;
   const iApprove = room ? canApprove(room, me.memberId) : false;
-
-  const flash = (what: 'code' | 'link') => {
-    setCopied(what);
-    window.setTimeout(() => setCopied(null), 1500);
-  };
 
   const members: Member[] = room
     ? Object.values(room.members).sort(
@@ -127,42 +118,10 @@ function RoomPanel({ session, snapshot, onClose, sharing, chat, confirmRemove }:
         <>
           <section className='border-b border-secondary-dark-gray p-3'>
             <h3 className={SECTION_TITLE}>Invite</h3>
-            <div className='flex items-center gap-2'>
-              <code className='min-w-0 flex-1 truncate rounded bg-primary-black px-2 py-1.5 text-[14px]'>{code}</code>
-              <button
-                type='button'
-                className={SMALL_BUTTON}
-                onClick={() => {
-                  copy(code);
-                  flash('code');
-                }}
-              >
-                {copied === 'code' ? 'Copied ✓' : 'Copy code'}
-              </button>
-            </div>
-            <div className='mt-2 flex flex-wrap gap-2'>
-              <button
-                type='button'
-                className={`${SMALL_BUTTON} text-accent`}
-                onClick={() => {
-                  copy(link!);
-                  flash('link');
-                }}
-              >
-                {copied === 'link' ? 'Link copied ✓' : '🔗 Copy invite link'}
-              </button>
-              {typeof navigator.share === 'function' && (
-                <button
-                  type='button'
-                  className={`${SMALL_BUTTON} text-accent`}
-                  onClick={() =>
-                    void navigator.share({ title: 'Watch together', text: `Join my room: ${code}`, url: link! }).catch(() => {})
-                  }
-                >
-                  Share…
-                </button>
-              )}
-            </div>
+            <p className='mb-2 text-primary-light-gray'>
+              Room <code className='font-mono text-primary-white'>{code}</code> — send the link, or let them scan it.
+            </p>
+            <InviteShare code={code} link={link!} from={snapshot.me.name} />
           </section>
 
           {sharing}
