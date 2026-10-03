@@ -211,6 +211,27 @@ function pickWithInput(multiple = true): Promise<File[]> {
   });
 }
 
+/**
+ * Pick ONE video with the SAME picker as "Open a video file" (File System
+ * Access where available, else the file input) — so "My copy" and "Open" show
+ * an identical dialog. Returns the File (null on cancel); it is NOT added to
+ * the library (the caller just needs the bytes).
+ */
+async function pickOneVideo(): Promise<File | null> {
+  const picker = (window as PickerWindow).showOpenFilePicker;
+  if (picker) {
+    try {
+      const [handle] = await picker.call(window, { multiple: false, id: 'watch-together-open', types: PICKER_TYPES });
+      return handle ? await handle.getFile() : null;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return null;
+      // policy-refused: fall through to the input
+    }
+  }
+  const [file] = await pickWithInput(false);
+  return file ?? null;
+}
+
 /** Files dropped onto the page, with handles where the browser offers them. */
 async function droppedVideos(dataTransfer: DataTransfer): Promise<{ file: File; handle: FileSystemFileHandle | null }[]> {
   // Everything is taken SYNCHRONOUSLY: the browser invalidates the dropped
@@ -234,5 +255,5 @@ function isVideoName(name: string, type = ''): boolean {
   return type.startsWith('video/') || /\.(mp4|m4v|mkv|webm|mov|ogv)$/i.test(name);
 }
 
-export { droppedVideos, isVideoName, OpenedFiles };
+export { droppedVideos, isVideoName, OpenedFiles, pickOneVideo };
 export type { OpenedEntry };

@@ -164,7 +164,10 @@ describe('rooms', () => {
     expect(asha.session.getSnapshot().room?.members[deepak.id]).toBeUndefined();
   });
 
-  it('an owner who vanishes is replaced after the grace period, and can come back', async () => {
+  it('an owner who just goes offline is NOT replaced, and resumes as owner', async () => {
+    // 2026-10-04: "the room owner going offline shouldn't make someone else
+    // owner." A silent drop (a crash / backgrounded phone) must leave the
+    // owner in place; only an explicit leave hands over.
     const network = createMemoryNetwork();
     const deepak = await person(network, 'Deepak');
     const asha = await person(network, 'Asha', { ownerGraceMs: 60 });
@@ -176,8 +179,9 @@ describe('rooms', () => {
     await until(() => deepak.storage.load()?.envelope !== null, 'Deepak stored the room');
     const stored = deepak.storage.load();
     await deepak.session.leave({ silent: true }); // a crash: no goodbye
-    await until(() => asha.session.getSnapshot().room?.owner === asha.id, 'Asha claimed ownership');
-    expect(asha.session.getSnapshot().room?.members[deepak.id]).toBeDefined(); // still a member
+    // Give any (now-removed) takeover a chance to wrongly fire.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(asha.session.getSnapshot().room?.owner).toBe(deepak.id); // still Deepak
     const back = new RoomSession({
       identity: deepak.identity,
       join: network.join,
@@ -186,7 +190,9 @@ describe('rooms', () => {
       handshakeTimeoutMs: 2000,
     });
     await back.resume();
-    await until(() => back.getSnapshot().room?.owner === asha.id, 'Deepak adopts the newer room');
+    await until(() => back.getSnapshot().status.kind === 'in-room', 'Deepak back in');
+    expect(back.getSnapshot().room?.owner).toBe(deepak.id); // resumes as owner
+    await until(() => asha.session.getSnapshot().online.size === 2, 'both online again');
   });
 
   it("a state signed by someone who is not the owner is ignored", async () => {
