@@ -33,14 +33,19 @@ import {
   verdictSchema,
 } from './protocol';
 import { inviteLink, newRoomCode, transportPassword, transportRoomId } from './roomCode';
+import type { Bus, JoinBus } from './relayBus';
+import type { JsonValue } from '@trystero-p2p/core';
 import type { MemberId, RoomAction, RoomState, ShareRule } from './roomModel';
 import { canApprove, createRoom, isMember, isNewer, roomReducer, successorOf } from './roomModel';
 import type { Signed } from './signed';
 import { openSigned, seal } from './signed';
 import type { HandshakeReceive, HandshakeSend, JoinTransport, RelayServer, TransportRoom } from './transport';
 
+const PRESENCE_MS = 8_000;
+const BUS_PEER_TIMEOUT_MS = 30_000;
+
 const HANDSHAKE_TIMEOUT_MS = 150_000;
-const OWNER_GRACE_MS = 15_000;
+const OWNER_GRACE_MS = 90_000;
 
 type RoomStatus =
   | { kind: 'idle' }
@@ -84,6 +89,9 @@ type SessionOptions = {
   ownerGraceMs?: number;
   /** The user's own relay (TURN) servers, read at every join. */
   relays?: () => RelayServer[];
+  /** A Nostr-relay message bus (feature D) — the fallback for peers with no
+   *  direct WebRTC path. Omitted in unit tests that use only the memory net. */
+  joinBus?: JoinBus;
 };
 
 type PeerInfo = { memberId: string; pub: string; name: string; avatar?: number };
@@ -109,10 +117,20 @@ class RoomSession {
   private readonly handshakeTimeoutMs: number;
   private readonly ownerGraceMs: number;
   private readonly relays: () => RelayServer[];
+  private readonly joinBus?: JoinBus;
   private name: string;
   private avatar: number | undefined;
 
   private transport: TransportRoom | null = null;
+  /** The raw Nostr bus under the composite transport (feature D). */
+  private bus: Bus | null = null;
+  /** Members reachable only over the bus: memberId → last-seen ms. */
+  private readonly busPeers = new Map<string, number>();
+  /** Action handlers, shared by the WebRTC transport and the bus. */
+  private readonly onHandlers = new Map<string, (data: unknown, peerId: string) => void>();
+  private presenceTimer: ReturnType<typeof setInterval> | undefined;
+  private busPruneTimer: ReturnType<typeof setInterval> | undefined;
+  private lastPresenceReplyAt = 0;
   private code: string | null = null;
   private roomId = '';
   private state: RoomState | null = null;
@@ -151,6 +169,7 @@ class RoomSession {
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
     this.ownerGraceMs = options.ownerGraceMs ?? OWNER_GRACE_MS;
     this.relays = options.relays ?? (() => []);
+    this.joinBus = options.joinBus;
     this.name = options.name;
     this.avatar = options.avatar;
     this.snapshot = this.build();
@@ -187,8 +206,10 @@ class RoomSession {
   }
 
   private setStatus(status: RoomStatus) {
+    const became = status.kind === 'in-room' && this.status.kind !== 'in-room';
     this.status = status;
     if (status.kind === 'in-room') for (const waiter of [...this.inRoomWaiters]) waiter();
+    if (became) this.pokePresence();
     this.emit();
   }
 
@@ -214,6 +235,12 @@ class RoomSession {
     this.roomEvents.add(events);
     if (this.transport) events.transport?.(this.transport);
     return () => this.roomEvents.delete(events);
+  }
+
+  /** Is this member reachable by a DIRECT WebRTC peer (not only the bus)?
+   *  Streaming and file copies need a direct connection; "My copy" does not. */
+  isDirect(memberId: string): boolean {
+    return this.hasDirectPeer(memberId);
   }
 
   /** The member a connected peer is (after its handshake). */
@@ -281,15 +308,17 @@ class RoomSession {
     } else {
       this.setStatus({ kind: 'waiting', since: this.now(), heard: 0 });
     }
-    const transport = await this.joinTransport(
+    const webrtc = await this.joinTransport(
       this.roomId,
       transportPassword(code),
       {
         onPeerHandshake: (peerId, send, receive) => this.handshake(peerId, send, receive),
         onJoinError: ({ peerId, error }) => {
-          // Found through the relays, but the two networks have no direct
-          // path: tell the user that, not "looking for the room".
-          if (/after exchanging SDP/i.test(error) && this.status.kind === 'waiting') {
+          // Found through the relays, but the two networks have no direct WebRTC
+          // path. With the bus (feature D) this is no longer fatal — join, chat
+          // and "My copy" still work over the relays — so only note it while we
+          // are still waiting AND the bus is not carrying us.
+          if (/after exchanging SDP/i.test(error) && this.status.kind === 'waiting' && !this.bus) {
             this.setStatus({ ...this.status, unreachable: (this.status.unreachable ?? 0) + 1 });
           }
           this.onHandshakeFailed(peerId);
@@ -298,9 +327,26 @@ class RoomSession {
       { handshakeTimeoutMs: this.handshakeTimeoutMs, relays: this.relays() },
     );
     if (generation !== this.generation) {
-      void transport.leave();
+      void webrtc.leave();
       return;
     }
+    // The bus runs ALONGSIDE WebRTC: a composite transport fans out sends to
+    // both and merges what comes back, so the session and every feature ride
+    // both paths unchanged. A directly-connected pair prefers WebRTC (bus
+    // duplicates are dropped in `busDeliver`).
+    if (this.joinBus) {
+      try {
+        this.bus = await this.joinBus(this.roomId, code, { onMessage: (plaintext) => void this.busDeliver(plaintext) });
+      } catch {
+        this.bus = null; // relays unreachable: WebRTC still works
+      }
+      if (generation !== this.generation) {
+        void webrtc.leave();
+        void this.bus?.leave();
+        return;
+      }
+    }
+    const transport = this.makeComposite(webrtc);
     this.transport = transport;
     for (const events of this.roomEvents) events.transport?.(transport);
     transport.onPeerJoin((peerId) => this.onPeerJoin(peerId));
@@ -309,6 +355,7 @@ class RoomSession {
     transport.on('decision', (data) => void this.onDecision(data));
     transport.on('member-op', (data, peerId) => void this.onMemberOp(data, peerId));
     transport.on('kick', (data) => void this.onKick(data));
+    if (this.bus) this.startBusPresence();
     this.persist();
   }
 
@@ -480,6 +527,160 @@ class RoomSession {
     this.storage?.save(null);
   }
 
+  // ── the relay bus (feature D) ─────────────────────────────────────────────
+
+  /** A transport that fans every send out to BOTH WebRTC and the bus, and
+   *  merges what comes back. The session and all features use it unchanged. */
+  private makeComposite(webrtc: TransportRoom): TransportRoom {
+    const joins: ((peerId: string) => void)[] = [];
+    const leaves: ((peerId: string) => void)[] = [];
+    webrtc.onPeerJoin((peerId) => joins.forEach((handler) => handler(peerId)));
+    webrtc.onPeerLeave((peerId) => leaves.forEach((handler) => handler(peerId)));
+    const toBus = async (action: string, data: JsonValue, to?: string[]) => {
+      const bus = this.bus;
+      if (bus) bus.send(await this.wrapBus(action, data, to));
+    };
+    return {
+      selfId: webrtc.selfId,
+      send: async (action, data, target) => {
+        if (target === undefined) {
+          await webrtc.send(action, data);
+          await toBus(action, data);
+          return;
+        }
+        const targets = ([] as string[]).concat(target);
+        const direct = targets.filter((id) => !id.startsWith('bus:'));
+        const busMembers = targets.filter((id) => id.startsWith('bus:')).map((id) => id.slice(4));
+        if (direct.length > 0) await webrtc.send(action, data, direct);
+        if (busMembers.length > 0) await toBus(action, data, busMembers);
+      },
+      on: (action, handler) => {
+        this.onHandlers.set(action, handler);
+        webrtc.on(action, handler);
+      },
+      onPeerJoin: (handler) => joins.push(handler),
+      onPeerLeave: (handler) => leaves.push(handler),
+      peers: () => webrtc.peers(),
+      closePeer: (peerId) => {
+        if (!peerId.startsWith('bus:')) webrtc.closePeer(peerId);
+      },
+      leave: () => webrtc.leave(),
+      media: webrtc.media,
+    };
+  }
+
+  /** Sign + tag an outgoing bus message (authenticity is the identity key's;
+   *  the bus itself only encrypts). `to` restricts it to named members. */
+  private async wrapBus(action: string, data: JsonValue, to?: string[]): Promise<string> {
+    const sealed = await seal(this.identity, 'wt-bus', {
+      room: this.roomId,
+      action,
+      data,
+      to: to ?? null,
+      at: this.now(),
+      n: randomToken(8),
+    });
+    return JSON.stringify(sealed);
+  }
+
+  private async unwrapBus(
+    plaintext: string,
+  ): Promise<{ action: string; data: unknown; by: string; pub: string; to: string[] | null } | null> {
+    let sealed: Signed<unknown>;
+    try {
+      sealed = JSON.parse(plaintext) as Signed<unknown>;
+    } catch {
+      return null;
+    }
+    if (!sealed || typeof sealed !== 'object' || !('payload' in sealed)) return null;
+    const payload = (await openSigned('wt-bus', sealed)) as
+      | { room: string; action: string; data: unknown; to: string[] | null }
+      | null;
+    if (!payload || payload.room !== this.roomId) return null;
+    return { action: payload.action, data: payload.data, by: sealed.by, pub: sealed.pub, to: payload.to ?? null };
+  }
+
+  private async busDeliver(plaintext: string) {
+    const msg = await this.unwrapBus(plaintext);
+    if (!msg || msg.by === this.me) return; // malformed, or our own echo
+    if (msg.to && !msg.to.includes(this.me)) return; // addressed to someone else
+    if (msg.action === 'bus-presence') {
+      this.onBusPresence(msg.by, msg.pub, msg.data);
+      return;
+    }
+    if (msg.action === 'bus-bye') {
+      this.onBusBye('bus:' + msg.by);
+      return;
+    }
+    // Prefer the direct path: a member we have a live WebRTC peer with already
+    // gets everything over it, so the bus copy would double-handle.
+    if (this.hasDirectPeer(msg.by)) return;
+    this.onHandlers.get(msg.action)?.(msg.data as JsonValue, 'bus:' + msg.by);
+  }
+
+  private hasDirectPeer(memberId: string): boolean {
+    for (const [peerId, info] of this.peers) if (!peerId.startsWith('bus:') && info.memberId === memberId) return true;
+    return false;
+  }
+
+  private onBusPresence(by: string, pub: string, data: unknown) {
+    const info = (data ?? {}) as { name?: string; avatar?: number; inRoom?: boolean; reply?: boolean };
+    this.busPeers.set(by, this.now());
+    const name = typeof info.name === 'string' ? info.name : 'Someone';
+    const avatar = typeof info.avatar === 'number' ? info.avatar : undefined;
+    if (!this.hasDirectPeer(by)) {
+      const peerId = 'bus:' + by;
+      if (this.state && isMember(this.state, by)) {
+        const existing = this.peers.get(peerId);
+        this.peers.set(peerId, { memberId: by, pub, name, ...avatarField(avatar) });
+        if (existing) this.emit();
+        else this.onPeerJoin(peerId);
+      } else if (this.inRoom && this.state && !this.held.has(by) && this.decided.get(by) === undefined) {
+        // A joiner reachable only over the bus: show it (approvers) and record
+        // the context (everyone), exactly as the WebRTC handshake would. On
+        // approve, the decision + room-state broadcast over the bus admit them.
+        void this.decideJoiner(by, name, pub, avatar);
+        if (this.isOwner) void this.publish();
+      }
+    }
+    // A new (non-reply) presence: echo ours back once, throttled, so both
+    // sides learn about each other without waiting for the next interval.
+    if (!info.reply && this.now() - this.lastPresenceReplyAt > 800) {
+      this.lastPresenceReplyAt = this.now();
+      this.broadcastPresence(true);
+    }
+  }
+
+  private onBusBye(peerId: string) {
+    this.busPeers.delete(peerId.slice(4));
+    if (this.peers.has(peerId)) this.onPeerLeave(peerId);
+  }
+
+  private broadcastPresence(reply = false) {
+    if (!this.bus) return;
+    void this.wrapBus('bus-presence', { name: this.name, ...avatarField(this.avatar), inRoom: this.inRoom, reply }).then(
+      (plaintext) => this.bus?.send(plaintext),
+    );
+  }
+
+  /** Announce presence now (on a membership/status change), not in 8 s. */
+  private pokePresence() {
+    if (this.bus) this.broadcastPresence(false);
+  }
+
+  private startBusPresence() {
+    this.broadcastPresence();
+    this.presenceTimer = setInterval(() => this.broadcastPresence(), PRESENCE_MS);
+    this.busPruneTimer = setInterval(() => {
+      const cutoff = this.now() - BUS_PEER_TIMEOUT_MS;
+      for (const [by, last] of this.busPeers) {
+        if (last >= cutoff) continue;
+        this.busPeers.delete(by);
+        if (this.peers.has('bus:' + by)) this.onPeerLeave('bus:' + by);
+      }
+    }, 5_000);
+  }
+
   // ── approvals ───────────────────────────────────────────────────────────
 
   async approve(memberId: string): Promise<void> {
@@ -572,6 +773,7 @@ class RoomSession {
     // Published even when this action handed ownership AWAY (leave,
     // transfer): the old owner's signature is what makes the handover valid.
     void this.publish({ handover: true });
+    this.pokePresence();
     this.emit();
   }
 
@@ -637,6 +839,7 @@ class RoomSession {
     if (wasOwner && !this.isOwner) this.notice ??= 'You are no longer the room owner.';
     // Joiners I was holding may have been decided meanwhile.
     for (const memberId of [...this.held.keys()]) if (isMember(incoming, memberId)) this.settle(memberId, true);
+    this.pokePresence();
     this.persist();
     this.emit();
   }
@@ -775,10 +978,26 @@ class RoomSession {
       // Give the goodbye a moment to go out before the connections close.
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
+    if (this.bus) {
+      try {
+        this.bus.send(await this.wrapBus('bus-bye', {}));
+      } catch {
+        // best effort — we are leaving anyway
+      }
+    }
+    clearInterval(this.presenceTimer);
+    clearInterval(this.busPruneTimer);
+    this.presenceTimer = undefined;
+    this.busPruneTimer = undefined;
     const transport = this.transport;
+    const bus = this.bus;
     this.transport = null;
+    this.bus = null;
     if (transport) for (const events of this.roomEvents) events.transport?.(null);
     await transport?.leave();
+    await bus?.leave();
+    this.busPeers.clear();
+    this.onHandlers.clear();
     for (const entry of this.held.values()) entry.resolvers.forEach((resolve) => resolve(false));
     this.held.clear();
     this.decided.clear();

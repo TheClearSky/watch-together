@@ -63,11 +63,15 @@ function ShareTab(props: ShareTabProps) {
   const [tick, setTick] = useState(0);
   const clock = shares.clock(shareId);
   const hasControl = shares.hasControl(shareId);
+  // Streaming needs a DIRECT connection to the sharer; over the relay bus only
+  // "My copy" works. `tick` re-reads it as the connection settles.
+  const canStream = shares.canStreamFrom(shareId);
+  void tick;
 
-  // Default mode: stream when the sharer can stream; otherwise ask for a copy.
+  // Default mode: stream when we actually can; otherwise ask for a copy.
   useEffect(() => {
-    if (mode === null && view && !view.ended) setMode(view.streamable ? 'stream' : null);
-  }, [mode, view]);
+    if (mode === null && view && !view.ended) setMode(canStream ? 'stream' : null);
+  }, [mode, view, canStream]);
 
   // Stream mode has no file to read subtitles from: ask the sharer (again
   // after a reconnect, and when the share moves to another video — the
@@ -112,7 +116,7 @@ function ShareTab(props: ShareTabProps) {
   useEffect(() => {
     if (mode === 'local' && localFile && view?.fingerprint && localFile.size !== view.fingerprint.size) {
       setLocalFile(null);
-      setMode(view.streamable ? 'stream' : null);
+      setMode(canStream ? 'stream' : null);
       setMessage(`${view.sharerName} switched to “${view.title}”.`);
     }
   }, [view?.fingerprint, localFile, mode, view]);
@@ -189,8 +193,14 @@ function ShareTab(props: ShareTabProps) {
           type='button'
           role='radio'
           aria-checked={mode === 'stream'}
-          disabled={!view.streamable}
-          title={view.streamable ? 'Watch the sharer’s live stream' : 'This sharer’s browser cannot stream — use your own copy'}
+          disabled={!canStream}
+          title={
+            canStream
+              ? 'Watch the sharer’s live stream'
+              : view.streamable
+                ? 'No direct connection to the sharer (e.g. mobile data) — use your own copy, or add a relay in Connection settings'
+                : 'This sharer’s browser cannot stream — use your own copy'
+          }
           className={`${BAR_BUTTON} ${mode === 'stream' ? 'bg-primary-dark-gray text-primary-white' : 'text-primary-light-gray'}`}
           onClick={() => setMode('stream')}
         >

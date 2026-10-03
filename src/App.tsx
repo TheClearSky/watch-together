@@ -190,6 +190,10 @@ function App() {
     (roomStatus === "in-room" || roomStatus === "waiting") && isTouchDevice(),
   );
   const requestCount = roomSnapshot?.requests.length ?? 0;
+  // Leaving a room (status back to idle) closes the room panel/drawer.
+  useEffect(() => {
+    if (roomStatus === "idle") setRoomPanelOpen(false);
+  }, [roomStatus]);
 
   // An invite link (#/room/<code>) opens the Join dialog with the code filled
   // in — unless you are already in that room (a reload resumes it).
@@ -773,8 +777,18 @@ function App() {
 
   const sidebar = (
     <PanelErrorBoundary resetKey={snapshot.library.mode.kind}>
-      <FileSidebar
-        className={narrow ? "h-full w-[min(320px,86vw)] shadow-2xl" : undefined}
+      <div
+        className={`flex min-h-0 flex-col bg-secondary-black ${narrow ? "h-full w-[min(320px,86vw)] shadow-2xl" : "h-full"}`}
+      >
+        <button
+          type="button"
+          onClick={openVideoFile}
+          className="flex flex-none cursor-pointer items-center gap-2 border-b border-secondary-dark-gray px-3 py-2.5 text-left text-[13px] text-accent transition-colors hover:bg-white/[0.04] pointer-coarse:py-3.5 pointer-coarse:text-[15px]"
+        >
+          🎞 Open a video file…
+        </button>
+        <FileSidebar
+          className="h-full min-h-0 flex-1"
         snapshot={snapshot.library}
         policy={videoPolicy}
         activeFileId={snapshot.activeFileId}
@@ -836,10 +850,11 @@ function App() {
           unlinkTitle: "Stop using this folder",
           inert: "Not a video",
           empty: canLinkFolders()
-            ? "Optional: link a folder to browse all its videos here. Single files open with “Open”; copies you save from a share land here."
-            : "Open single videos with “Open”; copies you save from a share land here. (Linking a folder needs Chrome or Edge on a computer.)",
+            ? "Nothing here yet. Use “Open a video file” above, or link a folder to browse all its videos. Copies you save from a share also land here."
+            : "Nothing here yet. Use “Open a video file” above. Copies you save from a share also land here. (Linking a whole folder needs Chrome or Edge on a computer.)",
         }}
-      />
+        />
+      </div>
     </PanelErrorBoundary>
   );
 

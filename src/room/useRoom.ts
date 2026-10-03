@@ -9,6 +9,7 @@ import { friendlyName } from '../social/names';
 import { isString, readPreference, writePreference } from '../storage';
 import { loadIdentity } from './identity';
 import { relayServers } from './relaySettings';
+import { createNostrBus } from './relayBus';
 import { RoomSession } from './session';
 import type { RoomSnapshot, StoredRoom } from './session';
 import { trysteroTransport } from './transport';
@@ -74,6 +75,9 @@ function getRoomSession(): Promise<RoomSession> {
       avatar: savedAvatar(),
       storage: tabStorage,
       relays: relayServers,
+      // Feature D: the Nostr-relay message fallback for peers with no direct
+      // WebRTC path (join/approve, chat, presence, "My copy" sync).
+      joinBus: createNostrBus(),
     });
     void session.resume();
     return session;
