@@ -101,6 +101,13 @@ function VideoPlayer(props: VideoPlayerProps) {
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(Number.NaN);
+  // Has the browser read the file's metadata yet? Until then show "Loading…"
+  // instead of a silent black frame (mobile showed 00:00 / --:-- forever).
+  const [metadataLoaded, setMetadataLoaded] = useState(false);
+  // If metadata is slow/stuck, surface the video element's own state so a
+  // stuck phone shows numbers instead of a black box (2026-10-04 field report:
+  // an hour, play pressed, still black, --:--).
+  const [loadDiag, setLoadDiag] = useState<string | null>(null);
   const [speed, setSpeed] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [resumedAt, setResumedAt] = useState<number | null>(null);
@@ -160,6 +167,7 @@ function VideoPlayer(props: VideoPlayerProps) {
 
   // An object URL per File; revoked when the file changes or the tab closes.
   useEffect(() => {
+    setMetadataLoaded(false);
     if (!file) {
       setUrl(null);
       return;
@@ -169,6 +177,26 @@ function VideoPlayer(props: VideoPlayerProps) {
     setError(null);
     return () => URL.revokeObjectURL(objectUrl);
   }, [file]);
+
+  // While a file is still loading, poll the element so a stuck device reveals
+  // what's wrong (readyState/networkState/error). Clears once metadata is in.
+  useEffect(() => {
+    if (!url || stream || metadataLoaded) {
+      setLoadDiag(null);
+      return;
+    }
+    const started = performance.now();
+    const NETWORK = ['no source', 'idle', 'loading', 'no source'];
+    const timer = window.setInterval(() => {
+      const v = videoRef.current;
+      if (!v) return;
+      const secs = Math.round((performance.now() - started) / 1000);
+      if (secs < 5) return; // only speak up if it's actually slow
+      const code = v.error ? ` · error ${v.error.code}` : '';
+      setLoadDiag(`${secs}s · ${NETWORK[v.networkState] ?? v.networkState} · ready ${v.readyState}${code}`);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [url, stream, metadataLoaded]);
 
   // The element exists only once the object URL does, so it is reported from
   // the ref callback, not a mount effect (which would see null).
@@ -248,6 +276,13 @@ function VideoPlayer(props: VideoPlayerProps) {
   }, [stream]);
 
   const shownTime = props.remote && (stream || locked || remoteControl) ? props.remote.time : time;
+  // A big, obvious Play button whenever a ready video is sitting paused — no
+  // autoplay. Covers a freshly opened file (controls auto-hide on mobile) and
+  // a stream the browser refused to start without a tap.
+  const showPlayOverlay =
+    active !== false &&
+    !error &&
+    (needsTap || (!stream && !!url && metadataLoaded && !playing && !remoteControl));
   const shownDuration = props.remote && (stream || locked || remoteControl) ? (props.remote.duration ?? Number.NaN) : duration;
   const shownPlaying = props.remote && (stream || remoteControl) ? props.remote.playing : playing;
 
@@ -493,6 +528,9 @@ function VideoPlayer(props: VideoPlayerProps) {
             ref={setVideo}
             src={url ?? undefined}
             playsInline
+            // Load eagerly: without this, mobile browsers left a freshly
+            // opened file at 00:00 / --:-- (metadata never fetched).
+            preload='auto'
             // Fill the player, keeping the aspect ratio: a 480p file or a
             // stream still ramping up (it starts small) must not sit in a
             // little box in the middle.
@@ -506,6 +544,8 @@ function VideoPlayer(props: VideoPlayerProps) {
             onDurationChange={(event) => setDuration(event.currentTarget.duration)}
             onRateChange={(event) => setSpeed(event.currentTarget.playbackRate)}
             onLoadedMetadata={(event) => {
+              setMetadataLoaded(true);
+              setDuration(event.currentTarget.duration);
               if (!resumeKey) return;
               const saved = resumePosition(resumeKey);
               if (saved !== null && saved < event.currentTarget.duration - 30) {
@@ -525,6 +565,13 @@ function VideoPlayer(props: VideoPlayerProps) {
               if (!locked && !remoteControl) props.onNext?.();
             }}
           />
+        )}
+        {url && !stream && !metadataLoaded && !error && (
+          <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center text-primary-light-gray'>
+            <span className='h-7 w-7 animate-spin rounded-full border-2 border-accent/30 border-t-accent' />
+            <span className='text-[13px]'>Loading video…</span>
+            {loadDiag && <span className='font-mono text-[11px] text-primary-light-gray/70'>{loadDiag}</span>}
+          </div>
         )}
         <AssLayer video={videoElement} script={assScript} fonts={assFonts} timeSource={props.mediaTime} />
         {ripple && (
@@ -548,15 +595,17 @@ function VideoPlayer(props: VideoPlayerProps) {
           </button>
         </div>
       )}
-      {needsTap && (
+      {showPlayOverlay && (
         <button
           type='button'
-          className='absolute inset-0 m-auto h-24 w-56 cursor-pointer rounded-xl bg-accent text-[17px] font-semibold text-primary-black shadow-2xl'
+          aria-label='Play video'
+          className='absolute inset-0 m-auto flex h-20 w-20 cursor-pointer items-center justify-center rounded-full bg-accent/90 text-[30px] text-primary-black shadow-2xl transition hover:scale-105'
           onClick={() => {
+            setNeedsTap(false);
             void play().then(() => setNeedsTap(Boolean(videoRef.current?.paused)));
           }}
         >
-          ▶ Tap to start watching
+          ▶
         </button>
       )}
       {offerFullscreen && (

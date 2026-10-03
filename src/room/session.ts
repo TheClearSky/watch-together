@@ -15,8 +15,8 @@
  *
  * AUTHORITY. The owner's room state is the truth: signed, versioned
  * (`epoch` changes only with ownership), adopted only when newer and signed
- * by the owner it names (or by the old owner handing over, or by the next in
- * line after the owner vanished for OWNER_GRACE_MS).
+ * by the owner it names (or by the old owner handing over when they EXPLICITLY
+ * leave — merely going offline never transfers ownership).
  */
 import { canonicalJson, randomToken, utf8 } from './encoding';
 import type { Identity } from './identity';
@@ -45,7 +45,6 @@ const PRESENCE_MS = 8_000;
 const BUS_PEER_TIMEOUT_MS = 30_000;
 
 const HANDSHAKE_TIMEOUT_MS = 150_000;
-const OWNER_GRACE_MS = 90_000;
 
 type RoomStatus =
   | { kind: 'idle' }
@@ -86,6 +85,7 @@ type SessionOptions = {
   /** Persist the current room across reloads (sessionStorage in the app). */
   storage?: { load(): StoredRoom | null; save(room: StoredRoom | null): void };
   handshakeTimeoutMs?: number;
+  /** Accepted for tests; ownership no longer auto-transfers on disconnect. */
   ownerGraceMs?: number;
   /** The user's own relay (TURN) servers, read at every join. */
   relays?: () => RelayServer[];
@@ -115,7 +115,6 @@ class RoomSession {
   private readonly now: () => number;
   private readonly storage: SessionOptions['storage'];
   private readonly handshakeTimeoutMs: number;
-  private readonly ownerGraceMs: number;
   private readonly relays: () => RelayServer[];
   private readonly joinBus?: JoinBus;
   private name: string;
@@ -167,7 +166,6 @@ class RoomSession {
     this.now = options.now ?? Date.now;
     this.storage = options.storage;
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
-    this.ownerGraceMs = options.ownerGraceMs ?? OWNER_GRACE_MS;
     this.relays = options.relays ?? (() => []);
     this.joinBus = options.joinBus;
     this.name = options.name;
@@ -863,21 +861,12 @@ class RoomSession {
     this.peers.delete(peerId);
     this.emit();
     for (const events of this.roomEvents) events.peerGone?.(peerId, info?.memberId);
-    if (!info || !this.state || info.memberId !== this.state.owner || this.isOwner) return;
-    clearTimeout(this.ownerTimer);
-    this.ownerTimer = setTimeout(() => this.claimIfNext(info.memberId), this.ownerGraceMs);
-  }
-
-  private claimIfNext(absentOwner: string) {
-    this.ownerTimer = undefined;
-    const state = this.state;
-    if (!state || state.owner !== absentOwner || this.snapshot.online.has(absentOwner)) return;
-    const present = (id: string) => this.snapshot.online.has(id);
-    if (successorOf(state, present) !== this.me) return;
-    this.state = roomReducer(state, { type: 'claimOwnership', by: this.me, absentOwner, present });
-    this.notice = 'The owner left, so you are now the room owner.';
-    void this.publish();
-    this.emit();
+    // The owner merely going OFFLINE no longer hands the room to anyone
+    // (2026-10-04: "the room owner going offline shouldn't make someone else
+    // owner"). Phones drop off constantly — the file picker, a lock, a tunnel
+    // switch — and the owner resumes as owner when they return. Ownership
+    // moves only when the owner EXPLICITLY leaves (the 'leave' action, which
+    // hands over via successorOf).
   }
 
   // ── owner controls (Q5, Q6) ─────────────────────────────────────────────
@@ -1021,5 +1010,5 @@ class RoomSession {
   }
 }
 
-export { HANDSHAKE_TIMEOUT_MS, OWNER_GRACE_MS, RoomSession };
+export { HANDSHAKE_TIMEOUT_MS, RoomSession };
 export type { JoinRequest, RoomEvents, RoomSnapshot, RoomStatus, StoredRoom };

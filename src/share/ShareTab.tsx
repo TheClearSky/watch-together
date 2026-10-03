@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { FileLibrary } from '@theclearsky/easy-folder-management-ui';
 import { EmptyState } from '@theclearsky/easy-folder-management-ui/ui';
+import { pickOneVideo } from '../library/openedFiles';
 import type { OpenedFiles } from '../library/openedFiles';
 import { formatTime, VideoPlayer } from '../player/VideoPlayer';
 import type { SubtitlePayload } from '../player/VideoPlayer';
@@ -39,17 +40,6 @@ type ShareTabProps = {
 
 const BAR_BUTTON =
   'cursor-pointer rounded px-3 py-1.5 text-[13px] hover:bg-white/10 disabled:cursor-default disabled:opacity-40 pointer-coarse:py-2.5 pointer-coarse:text-[15px]';
-
-function pickFile(): Promise<File | null> {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'video/*,.mkv,.webm,.mp4,.m4v,.mov';
-    input.addEventListener('change', () => resolve(input.files?.[0] ?? null));
-    input.addEventListener('cancel', () => resolve(null));
-    input.click();
-  });
-}
 
 function ShareTab(props: ShareTabProps) {
   const { shareId, shares } = props;
@@ -214,7 +204,7 @@ function ShareTab(props: ShareTabProps) {
           onClick={() => {
             if (localFile) setMode('local');
             else if (suggestion) void useCopy(suggestion.file);
-            else void pickFile().then((file) => file && useCopy(file));
+            else void pickOneVideo().then((file) => file && useCopy(file));
           }}
         >
           My copy
@@ -304,7 +294,7 @@ function ShareTab(props: ShareTabProps) {
                 hint: suggestion ? 'found it on your device' : 'pick the file',
                 onClick: () => {
                   if (suggestion) void useCopy(suggestion.file);
-                  else void pickFile().then((file) => file && useCopy(file));
+                  else void pickOneVideo().then((file) => file && useCopy(file));
                 },
               },
               ...(view.state ? [{ label: 'Their position', hint: formatTime(view.state.t) }] : []),
