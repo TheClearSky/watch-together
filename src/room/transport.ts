@@ -32,14 +32,33 @@ interface TransportRoom {
   readonly media: unknown;
 }
 
+/** A relay (TURN) server the user added themselves (Q-NET-1 C). */
+type RelayServer = { urls: string | string[]; username?: string; credential?: string };
+
 type JoinTransport = (
   roomId: string,
   password: string,
   callbacks: TransportCallbacks,
-  options: { handshakeTimeoutMs: number },
+  options: { handshakeTimeoutMs: number; relays?: RelayServer[] },
 ) => Promise<TransportRoom>;
 
 // ── Trystero (real WebRTC over Nostr discovery) ────────────────────────────
+
+/**
+ * How candidates travel (experiment, 2026-10-04 — R4 research): by default
+ * Trystero "trickles" each ICE candidate as its own short-lived relay
+ * message; in the phone-on-cellular field failure NONE of the phone's
+ * candidates ever arrived. `?net=full` (before the #) sends every candidate
+ * inside the offer/answer instead, using STUN servers that finish gathering
+ * fast (Google's and Cloudflare's stall ~40 s on IPv4-only networks while
+ * their IPv6 addresses time out — measured; Twilio's completes in ~0.1 s).
+ */
+const FAST_STUN = [{ urls: 'stun:global.stun.twilio.com:3478' }];
+function connectionMode(turnConfig: RelayServer[] | undefined): Record<string, unknown> {
+  const full = typeof location !== 'undefined' && new URLSearchParams(location.search).get('net') === 'full';
+  if (!full) return turnConfig ? { turnConfig } : {};
+  return { trickleIce: false, rtcConfig: { iceServers: [...FAST_STUN, ...(turnConfig ?? [])] } };
+}
 
 const APP_ID = 'watch-together-v1';
 
@@ -51,11 +70,20 @@ const trysteroTransport: JoinTransport = async (roomId, password, callbacks, opt
   // More relays than Trystero's default 5: public Nostr relays come and go
   // (two of the default picks for this app id were down on 2026-10-03), and
   // discovery only needs one shared relay to work.
-  const room = joinRoom({ appId: APP_ID, password, relayConfig: { redundancy: 8 } }, roomId, {
+  // Relay servers are optional and the user's own (Settings → Connection):
+  // browsers still prefer a direct path and use a relay only when none works.
+  const turnConfig = options.relays?.length ? options.relays : undefined;
+  const room = joinRoom({ appId: APP_ID, password, relayConfig: { redundancy: 8 }, ...connectionMode(turnConfig) }, roomId, {
     handshakeTimeoutMs: options.handshakeTimeoutMs,
     onPeerHandshake: (peerId, send, receive, isInitiator) =>
       callbacks.onPeerHandshake(peerId, (data) => send(data), () => receive(), isInitiator),
-    onJoinError: (details) => callbacks.onJoinError?.({ peerId: details.peerId, error: String(details.error) }),
+    onJoinError: (details) => {
+      // Observability: this is how a failed connection shows (e.g. "could not
+      // connect to peer … after exchanging SDP" — the networks block a direct
+      // connection, or a handshake was refused/timed out).
+      console.warn('[watch-together] peer connection failed:', details.peerId, String(details.error));
+      callbacks.onJoinError?.({ peerId: details.peerId, error: String(details.error) });
+    },
   });
   const actions = new Map<string, MessageAction<JsonValue>>();
   const action = (name: string): MessageAction<JsonValue> => {
@@ -221,4 +249,5 @@ function createMemoryNetwork() {
 }
 
 export { createMemoryNetwork, trysteroTransport };
+export type { RelayServer };
 export type { HandshakeReceive, HandshakeSend, JoinTransport, TransportCallbacks, TransportRoom };
