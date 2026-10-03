@@ -352,19 +352,26 @@ function App() {
     });
   };
 
-  // Toasts: a new share in the room; someone asking me for control.
-  const [toastedShares] = useState(() => new Set<string>());
+  // Toasts: a new share in the room; someone asking me for control. A share's
+  // toast goes away once you are watching it (from anywhere — the toast, the
+  // room panel, the Welcome page) or the share ends.
+  const [shareToasts] = useState(() => new Map<string, number>());
+  const watchingShare = active?.kind === 'share' ? active.key : null;
   useEffect(() => {
     for (const view of shareSnapshot.shares) {
-      if (toastedShares.has(view.shareId)) continue;
-      toastedShares.add(view.shareId);
-      toaster.show({
+      if (shareToasts.has(view.shareId) || view.ended || view.shareId === watchingShare) continue;
+      const id = toaster.show({
         message: `📡 ${view.sharerName} is sharing “${view.title}”`,
         action: { label: 'Watch', run: () => void workspace.openTab(tabId('share', view.shareId)) },
         timeoutMs: 15_000,
       });
+      shareToasts.set(view.shareId, id);
     }
-  }, [shareSnapshot.shares, toastedShares, workspace]);
+    for (const [shareId, id] of shareToasts) {
+      const view = shareSnapshot.shares.find((share) => share.shareId === shareId);
+      if (shareId === watchingShare || !view || view.ended) toaster.dismiss(id);
+    }
+  }, [shareSnapshot.shares, shareToasts, workspace, watchingShare]);
   useEffect(() => {
     if (!downloads) return;
     downloads.onRequest = (transfer) =>

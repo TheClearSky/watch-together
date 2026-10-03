@@ -121,13 +121,16 @@ export default defineConfig({
     chunkSizeWarningLimit: 750,
     rollupOptions: {
       output: {
-        // Long-lived vendor chunks: an app update re-downloads only the app.
+        // ONE long-lived vendor chunk: an app update re-downloads only the app.
+        // (Several hand-made vendor chunks — react / library / p2p — imported
+        // each other in a circle, and the live site crashed on load with
+        // "Cannot access 'lt' before initialization" (2026-10-03). A single
+        // vendor chunk cannot form a cycle: it never imports app code.)
+        // The big lazy libraries stay in their own on-demand chunks.
         manualChunks(id) {
-          if (!id.includes('node_modules') && !id.includes('easy-folder-management-ui')) return undefined;
-          if (/[\\/](react|react-dom|scheduler|react-router)[\\/]/.test(id)) return 'react';
-          if (/trystero|nostr|@noble|@scure/.test(id)) return 'p2p';
-          if (id.includes('easy-folder-management-ui') || /radix|headless-tree|idb-keyval/.test(id)) return 'library';
-          return undefined;
+          if (!id.includes('node_modules')) return undefined;
+          if (/[\\/]node_modules[\\/](three|jassub|abslink|lfa-ponyfill|throughput)[\\/]/.test(id)) return undefined;
+          return 'vendor';
         },
       },
     },

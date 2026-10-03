@@ -48,6 +48,7 @@ const SELECTORS = {
   roomSections: 'aside[aria-label="Room"] section',
   roomButtons: 'aside[aria-label="Room"] button',
   roomClose: 'aside[aria-label="Room"] button[aria-label="Close room panel"]',
+  roomShareInvite: 'aside[aria-label="Room"] [data-tour="share-invite"]',
   shareSource: '#content [role="radiogroup"][aria-label="Source"]',
   shareRadios: '#content [role="radiogroup"][aria-label="Source"] [role="radio"]',
   contentButtons: '#content button',
