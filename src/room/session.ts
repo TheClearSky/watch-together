@@ -37,7 +37,7 @@ import type { MemberId, RoomAction, RoomState, ShareRule } from './roomModel';
 import { canApprove, createRoom, isMember, isNewer, roomReducer, successorOf } from './roomModel';
 import type { Signed } from './signed';
 import { openSigned, seal } from './signed';
-import type { HandshakeReceive, HandshakeSend, JoinTransport, TransportRoom } from './transport';
+import type { HandshakeReceive, HandshakeSend, JoinTransport, RelayServer, TransportRoom } from './transport';
 
 const HANDSHAKE_TIMEOUT_MS = 150_000;
 const OWNER_GRACE_MS = 15_000;
@@ -45,8 +45,10 @@ const OWNER_GRACE_MS = 15_000;
 type RoomStatus =
   | { kind: 'idle' }
   | { kind: 'connecting' }
-  /** Asked to join; `heard` = how many people in the room answered so far. */
-  | { kind: 'waiting'; since: number; heard: number }
+  /** Asked to join; `heard` = how many people in the room answered so far;
+   *  `unreachable` = peers found through the relays whose connection could
+   *  not be opened (no direct path between the two networks). */
+  | { kind: 'waiting'; since: number; heard: number; unreachable?: number }
   | { kind: 'in-room' }
   | { kind: 'rejected'; reason: 'rejected' | 'banned' | 'timeout' }
   | { kind: 'kicked' }
@@ -80,6 +82,8 @@ type SessionOptions = {
   storage?: { load(): StoredRoom | null; save(room: StoredRoom | null): void };
   handshakeTimeoutMs?: number;
   ownerGraceMs?: number;
+  /** The user's own relay (TURN) servers, read at every join. */
+  relays?: () => RelayServer[];
 };
 
 type PeerInfo = { memberId: string; pub: string; name: string; avatar?: number };
@@ -104,6 +108,7 @@ class RoomSession {
   private readonly storage: SessionOptions['storage'];
   private readonly handshakeTimeoutMs: number;
   private readonly ownerGraceMs: number;
+  private readonly relays: () => RelayServer[];
   private name: string;
   private avatar: number | undefined;
 
@@ -145,6 +150,7 @@ class RoomSession {
     this.storage = options.storage;
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
     this.ownerGraceMs = options.ownerGraceMs ?? OWNER_GRACE_MS;
+    this.relays = options.relays ?? (() => []);
     this.name = options.name;
     this.avatar = options.avatar;
     this.snapshot = this.build();
@@ -280,9 +286,16 @@ class RoomSession {
       transportPassword(code),
       {
         onPeerHandshake: (peerId, send, receive) => this.handshake(peerId, send, receive),
-        onJoinError: ({ peerId }) => this.onHandshakeFailed(peerId),
+        onJoinError: ({ peerId, error }) => {
+          // Found through the relays, but the two networks have no direct
+          // path: tell the user that, not "looking for the room".
+          if (/after exchanging SDP/i.test(error) && this.status.kind === 'waiting') {
+            this.setStatus({ ...this.status, unreachable: (this.status.unreachable ?? 0) + 1 });
+          }
+          this.onHandshakeFailed(peerId);
+        },
       },
-      { handshakeTimeoutMs: this.handshakeTimeoutMs },
+      { handshakeTimeoutMs: this.handshakeTimeoutMs, relays: this.relays() },
     );
     if (generation !== this.generation) {
       void transport.leave();

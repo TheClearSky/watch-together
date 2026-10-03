@@ -8,6 +8,7 @@ import { randomAvatar } from '../social/Avatar';
 import { friendlyName } from '../social/names';
 import { isString, readPreference, writePreference } from '../storage';
 import { loadIdentity } from './identity';
+import { relayServers } from './relaySettings';
 import { RoomSession } from './session';
 import type { RoomSnapshot, StoredRoom } from './session';
 import { trysteroTransport } from './transport';
@@ -72,6 +73,7 @@ function getRoomSession(): Promise<RoomSession> {
       name: savedName(),
       avatar: savedAvatar(),
       storage: tabStorage,
+      relays: relayServers,
     });
     void session.resume();
     return session;

@@ -36,6 +36,8 @@ type WelcomeProps = {
   onCreate(profile: { name: string; avatar: number }, code: string): void;
   onJoin(profile: { name: string; avatar: number }, code: string): void;
   onOpenRoom(): void;
+  /** Settings → Connection (the user's own relay server). */
+  onOpenConnection(): void;
   shares: readonly WelcomeShare[];
   onWatch(shareId: string): void;
   onOpenVideo(): void;
@@ -113,6 +115,13 @@ function Welcome(props: WelcomeProps) {
   const [roomCode, setRoomCode] = useState(() => newRoomCode());
   const [joinCode, setJoinCode] = useState('');
   const [editingName, setEditingName] = useState(false);
+  // A clock for the "nobody answered yet" hint while knocking.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (status !== 'waiting') return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [status]);
 
   // The session loads asynchronously: take its (remembered) name and face.
   useEffect(() => {
@@ -148,6 +157,9 @@ function Welcome(props: WelcomeProps) {
           <p className={`-mt-1 text-[14px] ${MUTED}`}>
             {people.length === 1 ? 'Just you so far — invite your people:' : `${people.length} here. Invite more:`}
           </p>
+          <p className='-mt-2 text-[12.5px] text-[#d8c7a8]/55 pointer-fine:hidden'>
+            Keep this page open — the room lives in the browsers of the people in it.
+          </p>
           <InviteShare code={snapshot.code} link={snapshot.link} from={me?.name} onNotice={props.onNotice} />
           {props.shares.length > 0 && (
             <div className='flex flex-col gap-2'>
@@ -182,7 +194,13 @@ function Welcome(props: WelcomeProps) {
             <div>
               <p className='font-serif text-[20px] text-[#f4ead8]'>Asking to join {snapshot?.code}…</p>
               <p className={`text-[14px] ${MUTED}`}>
-                {waiting && waiting.heard > 0 ? 'Someone’s there — waiting for them to let you in.' : 'Looking for the room…'}
+                {waiting && waiting.heard > 0
+                  ? 'Someone’s there — waiting for them to let you in.'
+                  : waiting && (waiting.unreachable ?? 0) > 0
+                    ? 'Found the room, but your network and theirs can’t connect directly (common with mobile data). Join the same Wi-Fi, use one phone’s hotspot, or add a relay in Connection settings.'
+                  : waiting && now - waiting.since > 15_000
+                    ? 'Nobody from this room is online yet. The person who made it needs to keep the page open (on a phone: screen on, browser in front) — or check the code.'
+                    : 'Looking for the room…'}
               </p>
             </div>
           </div>
@@ -190,9 +208,15 @@ function Welcome(props: WelcomeProps) {
             <button type='button' className={`${SECONDARY} flex-1`} onClick={() => void session?.leave()}>
               Cancel
             </button>
-            <button type='button' className={`${SECONDARY} flex-1`} onClick={props.onOpenRoom}>
-              Details
-            </button>
+            {waiting && (waiting.unreachable ?? 0) > 0 && waiting.heard === 0 ? (
+              <button type='button' className={`${SECONDARY} flex-1`} onClick={props.onOpenConnection}>
+                Connection settings
+              </button>
+            ) : (
+              <button type='button' className={`${SECONDARY} flex-1`} onClick={props.onOpenRoom}>
+                Details
+              </button>
+            )}
           </div>
         </>
       );

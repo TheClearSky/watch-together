@@ -127,12 +127,12 @@ const shaftFragment = /* glsl */ `
 `;
 
 /*
- * Floating motes (2026-10-03: "i dont like the flashes and flickering,
- * instead have bigger particles that slowly disappear and reappear moving in
- * a flowy way"). Big, soft, dim bokeh discs — never sub-pixel, so they cannot
- * shimmer — each living a long slow cycle: fade in over a few seconds, drift
- * along a smooth flow field, fade out, and come back somewhere else. Kept
- * dim enough that bloom never catches them (no pulsing).
+ * Floating motes (2026-10-03: "bigger particles that slowly disappear and
+ * reappear moving in a flowy way", then "make the particles sharper, brighter
+ * and smaller and more numerous … increase the speed"). Small sharp specks —
+ * never sub-pixel, so they cannot shimmer — each living a smooth cycle: fade
+ * in, drift along a flowing current, fade out, come back somewhere else. No
+ * twinkle: brightness only ever changes through those slow fades.
  */
 const dustVertex = /* glsl */ `
   uniform float uTime;
@@ -142,7 +142,7 @@ const dustVertex = /* glsl */ `
   varying float vGlow;
   varying float vTint;
   void main() {
-    float period = 10.0 + 8.0 * fract(aSeed * 7.13);
+    float period = 6.0 + 5.0 * fract(aSeed * 7.13);
     float cycle = uTime / period + aSeed * 3.7;
     float life = fract(cycle);
     float generation = floor(cycle);
@@ -153,16 +153,17 @@ const dustVertex = /* glsl */ `
       cos(generation * 7.3333 + aSeed * 19.1) * 0.45);
     // Flowing drift: layered slow sines that depend on position — a soft
     // current rather than a wobble — plus a gentle rise over the life.
-    float t = uTime * 0.12;
+    float t = uTime * 0.3;
     vec3 p = home;
     p.x += sin(t * aDrift.x + home.y * 1.7 + aSeed * 6.0) * 0.32 + sin(t * 0.43 + home.z * 2.1) * 0.12;
     p.z += cos(t * aDrift.z + home.x * 1.3 + aSeed * 4.0) * 0.28;
-    p.y += life * (0.35 + 0.35 * aDrift.y) + sin(t * 0.7 + home.x * 1.9 + aSeed * 9.0) * 0.08;
+    p.y += life * (0.7 + 0.6 * aDrift.y) + sin(t * 0.7 + home.x * 1.9 + aSeed * 9.0) * 0.08;
     vec4 view = modelViewMatrix * vec4(p, 1.0);
     float fade = smoothstep(0.0, 0.3, life) * (1.0 - smoothstep(0.62, 1.0, life));
     vGlow = fade * (0.35 + 0.65 * fract(aSeed * 5.3));
     vTint = fract(aSeed * 11.7);
-    gl_PointSize = (16.0 + fract(aSeed * 3.1) * 26.0) * uPixelRatio * (4.0 / -view.z);
+    // Small but never sub-pixel (sub-pixel points shimmer as they move).
+    gl_PointSize = max(2.5 * uPixelRatio, (4.5 + fract(aSeed * 3.1) * 6.5) * uPixelRatio * (4.0 / -view.z));
     gl_Position = projectionMatrix * view;
   }
 `;
@@ -173,13 +174,12 @@ const dustFragment = /* glsl */ `
   varying float vTint;
   void main() {
     float d = length(gl_PointCoord - 0.5) * 2.0;
-    // Soft bokeh: a gaussian core with a faint rim, nothing hard-edged.
-    float core = exp(-d * d * 4.5);
-    float rim = smoothstep(1.0, 0.82, d) * smoothstep(0.55, 0.85, d) * 0.18;
-    float disc = (core + rim) * (1.0 - smoothstep(0.9, 1.0, d));
+    // A sharp bright speck: tight core, a short halo, a crisp (antialiased) edge.
+    float core = exp(-d * d * 10.0);
+    float disc = (core + 0.25 * exp(-d * d * 3.0)) * (1.0 - smoothstep(0.8, 1.0, d));
     vec3 ember = vec3(0.86, 0.28, 0.24);
     vec3 color = mix(uColor, ember, step(0.82, vTint) * 0.7);
-    gl_FragColor = vec4(color * disc * vGlow * 0.22, 1.0);
+    gl_FragColor = vec4(color * disc * vGlow * 0.55, 1.0);
   }
 `;
 
@@ -479,7 +479,7 @@ export function createCinemaScene(canvas: HTMLCanvasElement, options: CinemaScen
   // A faint projector beam crossing high behind the reel.
   shaft(new THREE.Vector3(-4.2, 3.6, -3.4), new THREE.Vector3(2.6, 1.4, 0.4), 1.0, new THREE.Color(0.95, 0.82, 0.62), 0.014);
 
-  const DUST = 90;
+  const DUST = 260;
   const dustRandom = seeded(77);
   const dustPositions = new Float32Array(DUST * 3);
   const dustSeeds = new Float32Array(DUST);
